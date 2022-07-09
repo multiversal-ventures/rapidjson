@@ -177,13 +177,13 @@ concept Handler {
     bool Uint64(uint64_t i);
     bool Double(double d);
     /// enabled via kParseNumbersAsStringsFlag, string is not null-terminated (use length)
-    bool RawNumber(const Ch* str, SizeType length, bool copy);
-    bool String(const Ch* str, SizeType length, bool copy);
-    bool StartObject();
-    bool Key(const Ch* str, SizeType length, bool copy);
-    bool EndObject(SizeType memberCount);
-    bool StartArray();
-    bool EndArray(SizeType elementCount);
+    bool RawNumber(SizeType offset, const Ch* str, SizeType length, bool copy);
+    bool String(SizeType offset, const Ch* str, SizeType length, bool copy);
+    bool StartObject(SizeType offset);
+    bool Key(SizeType offset, const Ch* str, SizeType length, bool copy);
+    bool EndObject(SizeType offset, SizeType memberCount);
+    bool StartArray(SizeType offset);
+    bool EndArray(SizeType offset, SizeType elementCount);
 };
 \endcode
 */
@@ -209,13 +209,13 @@ struct BaseReaderHandler {
     bool Uint64(uint64_t) { return static_cast<Override&>(*this).Default(); }
     bool Double(double) { return static_cast<Override&>(*this).Default(); }
     /// enabled via kParseNumbersAsStringsFlag, string is not null-terminated (use length)
-    bool RawNumber(const Ch* str, SizeType len, bool copy) { return static_cast<Override&>(*this).String(str, len, copy); }
-    bool String(const Ch*, SizeType, bool) { return static_cast<Override&>(*this).Default(); }
-    bool StartObject() { return static_cast<Override&>(*this).Default(); }
-    bool Key(const Ch* str, SizeType len, bool copy) { return static_cast<Override&>(*this).String(str, len, copy); }
-    bool EndObject(SizeType) { return static_cast<Override&>(*this).Default(); }
-    bool StartArray() { return static_cast<Override&>(*this).Default(); }
-    bool EndArray(SizeType) { return static_cast<Override&>(*this).Default(); }
+    bool RawNumber(SizeType offset, const Ch* str, SizeType len, bool copy) { return static_cast<Override&>(*this).String(str, len, copy); }
+    bool String(SizeType offset, const Ch*, SizeType, bool) { return static_cast<Override&>(*this).Default(); }
+    bool StartObject(SizeType offset) { return static_cast<Override&>(*this).Default(); }
+    bool Key(SizeType offset, const Ch* str, SizeType len, bool copy) { return static_cast<Override&>(*this).String(str, len, copy); }
+    bool EndObject(SizeType offset, SizeType) { return static_cast<Override&>(*this).Default(); }
+    bool StartArray(SizeType offset) { return static_cast<Override&>(*this).Default(); }
+    bool EndArray(SizeType offset, SizeType) { return static_cast<Override&>(*this).Default(); }
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -741,14 +741,14 @@ private:
         RAPIDJSON_ASSERT(is.Peek() == '{');
         is.Take();  // Skip '{'
 
-        if (RAPIDJSON_UNLIKELY(!handler.StartObject()))
+        if (RAPIDJSON_UNLIKELY(!handler.StartObject(is.Tell())))
             RAPIDJSON_PARSE_ERROR(kParseErrorTermination, is.Tell());
 
         SkipWhitespaceAndComments<parseFlags>(is);
         RAPIDJSON_PARSE_ERROR_EARLY_RETURN_VOID;
 
         if (Consume(is, '}')) {
-            if (RAPIDJSON_UNLIKELY(!handler.EndObject(0)))  // empty object
+            if (RAPIDJSON_UNLIKELY(!handler.EndObject(is.Tell(), 0)))  // empty object
                 RAPIDJSON_PARSE_ERROR(kParseErrorTermination, is.Tell());
             return;
         }
@@ -785,7 +785,7 @@ private:
                     break;
                 case '}':
                     is.Take();
-                    if (RAPIDJSON_UNLIKELY(!handler.EndObject(memberCount)))
+                    if (RAPIDJSON_UNLIKELY(!handler.EndObject(is.Tell(), memberCount)))
                         RAPIDJSON_PARSE_ERROR(kParseErrorTermination, is.Tell());
                     return;
                 default:
@@ -794,7 +794,7 @@ private:
 
             if (parseFlags & kParseTrailingCommasFlag) {
                 if (is.Peek() == '}') {
-                    if (RAPIDJSON_UNLIKELY(!handler.EndObject(memberCount)))
+                    if (RAPIDJSON_UNLIKELY(!handler.EndObject(is.Tell(), memberCount)))
                         RAPIDJSON_PARSE_ERROR(kParseErrorTermination, is.Tell());
                     is.Take();
                     return;
@@ -809,14 +809,14 @@ private:
         RAPIDJSON_ASSERT(is.Peek() == '[');
         is.Take();  // Skip '['
 
-        if (RAPIDJSON_UNLIKELY(!handler.StartArray()))
+        if (RAPIDJSON_UNLIKELY(!handler.StartArray(is.Tell())))
             RAPIDJSON_PARSE_ERROR(kParseErrorTermination, is.Tell());
 
         SkipWhitespaceAndComments<parseFlags>(is);
         RAPIDJSON_PARSE_ERROR_EARLY_RETURN_VOID;
 
         if (Consume(is, ']')) {
-            if (RAPIDJSON_UNLIKELY(!handler.EndArray(0))) // empty array
+            if (RAPIDJSON_UNLIKELY(!handler.EndArray(is.Tell(), 0))) // empty array
                 RAPIDJSON_PARSE_ERROR(kParseErrorTermination, is.Tell());
             return;
         }
@@ -834,7 +834,7 @@ private:
                 RAPIDJSON_PARSE_ERROR_EARLY_RETURN_VOID;
             }
             else if (Consume(is, ']')) {
-                if (RAPIDJSON_UNLIKELY(!handler.EndArray(elementCount)))
+                if (RAPIDJSON_UNLIKELY(!handler.EndArray(is.Tell(), elementCount)))
                     RAPIDJSON_PARSE_ERROR(kParseErrorTermination, is.Tell());
                 return;
             }
@@ -843,7 +843,7 @@ private:
 
             if (parseFlags & kParseTrailingCommasFlag) {
                 if (is.Peek() == ']') {
-                    if (RAPIDJSON_UNLIKELY(!handler.EndArray(elementCount)))
+                    if (RAPIDJSON_UNLIKELY(!handler.EndArray(is.Tell(), elementCount)))
                         RAPIDJSON_PARSE_ERROR(kParseErrorTermination, is.Tell());
                     is.Take();
                     return;
@@ -971,7 +971,7 @@ private:
             size_t length = s.PutEnd(head) - 1;
             RAPIDJSON_ASSERT(length <= 0xFFFFFFFF);
             const typename TargetEncoding::Ch* const str = reinterpret_cast<typename TargetEncoding::Ch*>(head);
-            success = (isKey ? handler.Key(str, SizeType(length), false) : handler.String(str, SizeType(length), false));
+            success = (isKey ? handler.Key(is.Tell() - length - 1, str, SizeType(length), false) : handler.String(is.Tell() - length - 1, str, SizeType(length), false));
         }
         else {
             StackStream<typename TargetEncoding::Ch> stackStream(stack_);
@@ -979,7 +979,7 @@ private:
             RAPIDJSON_PARSE_ERROR_EARLY_RETURN_VOID;
             SizeType length = static_cast<SizeType>(stackStream.Length()) - 1;
             const typename TargetEncoding::Ch* const str = stackStream.Pop();
-            success = (isKey ? handler.Key(str, length, true) : handler.String(str, length, true));
+            success = (isKey ? handler.Key(is.Tell() - length - 1, str, length, true) : handler.String(is.Tell() - length - 1, str, length, true));
         }
         if (RAPIDJSON_UNLIKELY(!success))
             RAPIDJSON_PARSE_ERROR(kParseErrorTermination, s.Tell());
@@ -1690,7 +1690,7 @@ private:
                 RAPIDJSON_ASSERT(length <= 0xFFFFFFFF);
                 // unable to insert the \0 character here, it will erase the comma after this number
                 const typename TargetEncoding::Ch* const str = reinterpret_cast<typename TargetEncoding::Ch*>(head);
-                cont = handler.RawNumber(str, SizeType(length), false);
+                cont = handler.RawNumber(startOffset, str, SizeType(length), false);
             }
             else {
                 SizeType numCharsToCopy = static_cast<SizeType>(s.Length());
@@ -1702,7 +1702,7 @@ private:
                 dstStream.Put('\0');
                 const typename TargetEncoding::Ch* str = dstStream.Pop();
                 const SizeType length = static_cast<SizeType>(dstStream.Length()) - 1;
-                cont = handler.RawNumber(str, SizeType(length), true);
+                cont = handler.RawNumber(startOffset, str, SizeType(length), true);
             }
         }
         else {
@@ -2030,7 +2030,7 @@ private:
             // Initialize and push the member/element count.
             *stack_.template Push<SizeType>(1) = 0;
             // Call handler
-            bool hr = (dst == IterativeParsingObjectInitialState) ? handler.StartObject() : handler.StartArray();
+            bool hr = (dst == IterativeParsingObjectInitialState) ? handler.StartObject(is.Tell()) : handler.StartArray(is.Tell());
             // On handler short circuits the parsing.
             if (!hr) {
                 RAPIDJSON_PARSE_ERROR_NORETURN(kParseErrorTermination, is.Tell());
@@ -2095,7 +2095,7 @@ private:
             if (n == IterativeParsingStartState)
                 n = IterativeParsingFinishState;
             // Call handler
-            bool hr = handler.EndObject(c);
+            bool hr = handler.EndObject(is.Tell(), c);
             // On handler short circuits the parsing.
             if (!hr) {
                 RAPIDJSON_PARSE_ERROR_NORETURN(kParseErrorTermination, is.Tell());
@@ -2125,7 +2125,7 @@ private:
             if (n == IterativeParsingStartState)
                 n = IterativeParsingFinishState;
             // Call handler
-            bool hr = handler.EndArray(c);
+            bool hr = handler.EndArray(is.Tell(), c);
             // On handler short circuits the parsing.
             if (!hr) {
                 RAPIDJSON_PARSE_ERROR_NORETURN(kParseErrorTermination, is.Tell());
